@@ -1,40 +1,3 @@
-/*	$OpenBSD: engine.c,v 1.15 2005/08/05 13:03:00 espie Exp $	*/
-
-/*-
- * Copyright (c) 1992, 1993, 1994 Henry Spencer.
- * Copyright (c) 1992, 1993, 1994
- *	The Regents of the University of California.  All rights reserved.
- *
- * This code is derived from software contributed to Berkeley by
- * Henry Spencer.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- *	@(#)engine.c	8.5 (Berkeley) 3/20/94
- */
-
 /*
  * The matching engine and friends.  This file is #included by regexec.c
  * after suitable #defines of a variety of macros used herein, so that
@@ -52,7 +15,6 @@
 #define	print	sprint
 #define	at	sat
 #define	match	smat
-#define	nope	snope
 #endif
 #ifdef LNAMES
 #define	matcher	lmatcher
@@ -64,7 +26,6 @@
 #define	print	lprint
 #define	at	lat
 #define	match	lmat
-#define	nope	lnope
 #endif
 
 /* another structure passed up and down to avoid zillions of parameters */
@@ -84,37 +45,13 @@ struct match {
 	states empty;		/* empty set of states */
 };
 
-static int matcher(struct re_guts *, char *, size_t, regmatch_t[], int);
-static char *dissect(struct match *, char *, char *, sopno, sopno);
-static char *backref(struct match *, char *, char *, sopno, sopno, sopno, int);
-static char *fast(struct match *, char *, char *, sopno, sopno);
-static char *slow(struct match *, char *, char *, sopno, sopno);
-static states step(struct re_guts *, sopno, sopno, states, int, states);
-#define MAX_RECURSION	100
-#define	BOL	(OUT+1)
-#define	EOL	(BOL+1)
-#define	BOLEOL	(BOL+2)
-#define	NOTHING	(BOL+3)
-#define	BOW	(BOL+4)
-#define	EOW	(BOL+5)
-#define	CODEMAX	(BOL+5)		/* highest code used */
-#define	NONCHAR(c)	((c) > CHAR_MAX)
-#define	NNONCHAR	(CODEMAX-CHAR_MAX)
-#ifdef REDEBUG
-static void print(struct match *, char *, states, int, FILE *);
-#endif
-#ifdef REDEBUG
-static void at(struct match *, char *, char *, char *, sopno, sopno);
-#endif
-#ifdef REDEBUG
-static char *pchar(int);
-#endif
+#include "engine.ih"
+#include "ap_ctype.h"
 
 #ifdef REDEBUG
 #define	SP(t, s, c)	print(m, t, s, c, stdout)
 #define	AT(t, p1, p2, s1, s2)	at(m, t, p1, p2, s1, s2)
-#define	NOTE(str)	{ if (m->eflags&REG_TRACE) (void)printf("=%s\n", (str)); }
-static int nope = 0;
+#define	NOTE(str)	{ if (m->eflags&REG_TRACE) printf("=%s\n", (str)); }
 #else
 #define	SP(t, s, c)	/* nothing */
 #define	AT(t, p1, p2, s1, s2)	/* nothing */
@@ -123,18 +60,24 @@ static int nope = 0;
 
 /*
  - matcher - the actual matching engine
+ == static int matcher(register struct re_guts *g, char *string, \
+ ==	size_t nmatch, regmatch_t pmatch[], int eflags);
  */
 static int			/* 0 success, REG_NOMATCH failure */
-matcher(struct re_guts *g, char *string, size_t nmatch, regmatch_t pmatch[],
-    int eflags)
+matcher(g, string, nmatch, pmatch, eflags)
+register struct re_guts *g;
+char *string;
+size_t nmatch;
+regmatch_t pmatch[];
+int eflags;
 {
-	char *endp;
-	int i;
+	register char *endp;
+	register size_t i;
 	struct match mv;
-	struct match *m = &mv;
-	char *dp;
-	const sopno gf = g->firststate+1;	/* +1 for OEND */
-	const sopno gl = g->laststate;
+	register struct match *m = &mv;
+	register char *dp;
+	register const sopno gf = g->firststate+1;	/* +1 for OEND */
+	register const sopno gl = g->laststate;
 	char *start;
 	char *stop;
 
@@ -180,8 +123,6 @@ matcher(struct re_guts *g, char *string, size_t nmatch, regmatch_t pmatch[],
 	for (;;) {
 		endp = fast(m, start, stop, gf, gl);
 		if (endp == NULL) {		/* a miss */
-			free(m->pmatch);
-			free(m->lastpos);
 			STATETEARDOWN(m);
 			return(REG_NOMATCH);
 		}
@@ -224,7 +165,7 @@ matcher(struct re_guts *g, char *string, size_t nmatch, regmatch_t pmatch[],
 				return(REG_ESPACE);
 			}
 			NOTE("backref dissect");
-			dp = backref(m, m->coldp, endp, gf, gl, (sopno)0, 0);
+			dp = backref(m, m->coldp, endp, gf, gl, (sopno)0);
 		}
 		if (dp != NULL)
 			break;
@@ -247,7 +188,7 @@ matcher(struct re_guts *g, char *string, size_t nmatch, regmatch_t pmatch[],
 			}
 #endif
 			NOTE("backoff dissect");
-			dp = backref(m, m->coldp, endp, gf, gl, (sopno)0, 0);
+			dp = backref(m, m->coldp, endp, gf, gl, (sopno)0);
 		}
 		assert(dp == NULL || dp == endp);
 		if (dp != NULL)		/* found a shorter one */
@@ -255,9 +196,8 @@ matcher(struct re_guts *g, char *string, size_t nmatch, regmatch_t pmatch[],
 
 		/* despite initial appearances, there is no match here */
 		NOTE("false alarm");
-		if (m->coldp == stop)
-			break;
 		start = m->coldp + 1;	/* recycle starting later */
+		assert(start <= stop);
 	}
 
 	/* fill in the details if requested */
@@ -286,23 +226,30 @@ matcher(struct re_guts *g, char *string, size_t nmatch, regmatch_t pmatch[],
 
 /*
  - dissect - figure out what matched what, no back references
+ == static char *dissect(register struct match *m, char *start, \
+ ==	char *stop, sopno startst, sopno stopst);
  */
 static char *			/* == stop (success) always */
-dissect(struct match *m, char *start, char *stop, sopno startst, sopno stopst)
+dissect(m, start, stop, startst, stopst)
+register struct match *m;
+char *start;
+char *stop;
+sopno startst;
+sopno stopst;
 {
-	int i;
-	sopno ss;	/* start sop of current subRE */
-	sopno es;	/* end sop of current subRE */
-	char *sp;	/* start of string matched by it */
-	char *stp;	/* string matched by it cannot pass here */
-	char *rest;	/* start of rest of string */
-	char *tail;	/* string unmatched by rest of RE */
-	sopno ssub;	/* start sop of subsubRE */
-	sopno esub;	/* end sop of subsubRE */
-	char *ssp;	/* start of string matched by subsubRE */
-	char *sep;	/* end of string matched by subsubRE */
-	char *oldssp;	/* previous ssp */
-	char *dp;
+	register int i;
+	register sopno ss;	/* start sop of current subRE */
+	register sopno es;	/* end sop of current subRE */
+	register char *sp;	/* start of string matched by it */
+	register char *stp;	/* string matched by it cannot pass here */
+	register char *rest;	/* start of rest of string */
+	register char *tail;	/* string unmatched by rest of RE */
+	register sopno ssub;	/* start sop of subsubRE */
+	register sopno esub;	/* end sop of subsubRE */
+	register char *ssp;	/* start of string matched by subsubRE */
+	register char *sep;	/* end of string matched by subsubRE */
+	register char *oldssp;	/* previous ssp */
+	register char *dp;
 
 	AT("diss", start, stop, startst, stopst);
 	sp = start;
@@ -467,23 +414,30 @@ dissect(struct match *m, char *start, char *stop, sopno startst, sopno stopst)
 
 /*
  - backref - figure out what matched what, figuring in back references
+ == static char *backref(register struct match *m, char *start, \
+ ==	char *stop, sopno startst, sopno stopst, sopno lev);
  */
 static char *			/* == stop (success) or NULL (failure) */
-backref(struct match *m, char *start, char *stop, sopno startst, sopno stopst,
-    sopno lev, int rec)			/* PLUS nesting level */
+backref(m, start, stop, startst, stopst, lev)
+register struct match *m;
+char *start;
+char *stop;
+sopno startst;
+sopno stopst;
+sopno lev;			/* PLUS nesting level */
 {
-	int i;
-	sopno ss;	/* start sop of current subRE */
-	char *sp;	/* start of string matched by it */
-	sopno ssub;	/* start sop of subsubRE */
-	sopno esub;	/* end sop of subsubRE */
-	char *ssp;	/* start of string matched by subsubRE */
-	char *dp;
-	size_t len;
-	int hard;
-	sop s;
-	regoff_t offsave;
-	cset *cs;
+	register int i;
+	register sopno ss;	/* start sop of current subRE */
+	register char *sp;	/* start of string matched by it */
+	register sopno ssub;	/* start sop of subsubRE */
+	register sopno esub;	/* end sop of subsubRE */
+	register char *ssp;	/* start of string matched by subsubRE */
+	register char *dp;
+	register size_t len;
+	register int hard;
+	register sop s;
+	register regoff_t offsave;
+	register cset *cs;
 
 	AT("back", start, stop, startst, stopst);
 	sp = start;
@@ -576,8 +530,6 @@ backref(struct match *m, char *start, char *stop, sopno startst, sopno stopst,
 			return(NULL);
 		assert(m->pmatch[i].rm_so != -1);
 		len = m->pmatch[i].rm_eo - m->pmatch[i].rm_so;
-		if (len == 0 && rec++ > MAX_RECURSION)
-			return(NULL);
 		assert(stop - m->beginp >= len);
 		if (sp > stop - len)
 			return(NULL);	/* not enough left to match */
@@ -586,28 +538,28 @@ backref(struct match *m, char *start, char *stop, sopno startst, sopno stopst,
 			return(NULL);
 		while (m->g->strip[ss] != SOP(O_BACK, i))
 			ss++;
-		return(backref(m, sp+len, stop, ss+1, stopst, lev, rec));
+		return(backref(m, sp+len, stop, ss+1, stopst, lev));
 		break;
 	case OQUEST_:		/* to null or not */
-		dp = backref(m, sp, stop, ss+1, stopst, lev, rec);
+		dp = backref(m, sp, stop, ss+1, stopst, lev);
 		if (dp != NULL)
 			return(dp);	/* not */
-		return(backref(m, sp, stop, ss+OPND(s)+1, stopst, lev, rec));
+		return(backref(m, sp, stop, ss+OPND(s)+1, stopst, lev));
 		break;
 	case OPLUS_:
 		assert(m->lastpos != NULL);
 		assert(lev+1 <= m->g->nplus);
 		m->lastpos[lev+1] = sp;
-		return(backref(m, sp, stop, ss+1, stopst, lev+1, rec));
+		return(backref(m, sp, stop, ss+1, stopst, lev+1));
 		break;
 	case O_PLUS:
 		if (sp == m->lastpos[lev])	/* last pass matched null */
-			return(backref(m, sp, stop, ss+1, stopst, lev-1, rec));
+			return(backref(m, sp, stop, ss+1, stopst, lev-1));
 		/* try another pass */
 		m->lastpos[lev] = sp;
-		dp = backref(m, sp, stop, ss-OPND(s)+1, stopst, lev, rec);
+		dp = backref(m, sp, stop, ss-OPND(s)+1, stopst, lev);
 		if (dp == NULL)
-			return(backref(m, sp, stop, ss+1, stopst, lev-1, rec));
+			return(backref(m, sp, stop, ss+1, stopst, lev-1));
 		else
 			return(dp);
 		break;
@@ -616,7 +568,7 @@ backref(struct match *m, char *start, char *stop, sopno startst, sopno stopst,
 		esub = ss + OPND(s) - 1;
 		assert(OP(m->g->strip[esub]) == OOR1);
 		for (;;) {	/* find first matching branch */
-			dp = backref(m, sp, stop, ssub, esub, lev, rec);
+			dp = backref(m, sp, stop, ssub, esub, lev);
 			if (dp != NULL)
 				return(dp);
 			/* that one missed, try next one */
@@ -637,7 +589,7 @@ backref(struct match *m, char *start, char *stop, sopno startst, sopno stopst,
 		assert(0 < i && i <= m->g->nsub);
 		offsave = m->pmatch[i].rm_so;
 		m->pmatch[i].rm_so = sp - m->offp;
-		dp = backref(m, sp, stop, ss+1, stopst, lev, rec);
+		dp = backref(m, sp, stop, ss+1, stopst, lev);
 		if (dp != NULL)
 			return(dp);
 		m->pmatch[i].rm_so = offsave;
@@ -648,7 +600,7 @@ backref(struct match *m, char *start, char *stop, sopno startst, sopno stopst,
 		assert(0 < i && i <= m->g->nsub);
 		offsave = m->pmatch[i].rm_eo;
 		m->pmatch[i].rm_eo = sp - m->offp;
-		dp = backref(m, sp, stop, ss+1, stopst, lev, rec);
+		dp = backref(m, sp, stop, ss+1, stopst, lev);
 		if (dp != NULL)
 			return(dp);
 		m->pmatch[i].rm_eo = offsave;
@@ -662,23 +614,31 @@ backref(struct match *m, char *start, char *stop, sopno startst, sopno stopst,
 	/* "can't happen" */
 	assert(nope);
 	/* NOTREACHED */
+	return( NULL );
 }
 
 /*
  - fast - step through the string at top speed
+ == static char *fast(register struct match *m, char *start, \
+ ==	char *stop, sopno startst, sopno stopst);
  */
 static char *			/* where tentative match ended, or NULL */
-fast(struct match *m, char *start, char *stop, sopno startst, sopno stopst)
+fast(m, start, stop, startst, stopst)
+register struct match *m;
+char *start;
+char *stop;
+sopno startst;
+sopno stopst;
 {
-	states st = m->st;
-	states fresh = m->fresh;
-	states tmp = m->tmp;
-	char *p = start;
-	int c = (start == m->beginp) ? OUT : *(start-1);
-	int lastc;	/* previous c */
-	int flagch;
-	int i;
-	char *coldp;	/* last p after which no match was underway */
+	register states st = m->st;
+	register states fresh = m->fresh;
+	register states tmp = m->tmp;
+	register char *p = start;
+	register int c = (start == m->beginp) ? OUT : *(start-1);
+	register int lastc;	/* previous c */
+	register int flagch;
+	register int i;
+	register char *coldp;	/* last p after which no match was underway */
 
 	CLEAR(st);
 	SET1(st, startst);
@@ -750,19 +710,26 @@ fast(struct match *m, char *start, char *stop, sopno startst, sopno stopst)
 
 /*
  - slow - step through the string more deliberately
+ == static char *slow(register struct match *m, char *start, \
+ ==	char *stop, sopno startst, sopno stopst);
  */
 static char *			/* where it ended */
-slow(struct match *m, char *start, char *stop, sopno startst, sopno stopst)
+slow(m, start, stop, startst, stopst)
+register struct match *m;
+char *start;
+char *stop;
+sopno startst;
+sopno stopst;
 {
-	states st = m->st;
-	states empty = m->empty;
-	states tmp = m->tmp;
-	char *p = start;
-	int c = (start == m->beginp) ? OUT : *(start-1);
-	int lastc;	/* previous c */
-	int flagch;
-	int i;
-	char *matchp;	/* last p at which a match ended */
+	register states st = m->st;
+	register states empty = m->empty;
+	register states tmp = m->tmp;
+	register char *p = start;
+	register int c = (start == m->beginp) ? OUT : *(start-1);
+	register int lastc;	/* previous c */
+	register int flagch;
+	register int i;
+	register char *matchp;	/* last p at which a match ended */
 
 	AT("slow", start, stop, startst, stopst);
 	CLEAR(st);
@@ -830,21 +797,33 @@ slow(struct match *m, char *start, char *stop, sopno startst, sopno stopst)
 
 /*
  - step - map set of states reachable before char to set reachable after
+ == static states step(register struct re_guts *g, sopno start, sopno stop, \
+ ==	register states bef, int ch, register states aft);
+ == #define	BOL	(OUT+1)
+ == #define	EOL	(BOL+1)
+ == #define	BOLEOL	(BOL+2)
+ == #define	NOTHING	(BOL+3)
+ == #define	BOW	(BOL+4)
+ == #define	EOW	(BOL+5)
+ == #define	CODEMAX	(BOL+5)		// highest code used
+ == #define	NONCHAR(c)	((c) > CHAR_MAX)
+ == #define	NNONCHAR	(CODEMAX-CHAR_MAX)
  */
 static states
-step(struct re_guts *g,
-    sopno start,		/* start state within strip */
-    sopno stop,			/* state after stop state within strip */
-    states bef,			/* states reachable before */
-    int ch,			/* character or NONCHAR code */
-    states aft)			/* states already known reachable after */
+step(g, start, stop, bef, ch, aft)
+register struct re_guts *g;
+sopno start;			/* start state within strip */
+sopno stop;			/* state after stop state within strip */
+register states bef;		/* states reachable before */
+int ch;				/* character or NONCHAR code */
+register states aft;		/* states already known reachable after */
 {
-	cset *cs;
-	sop s;
-	sopno pc;
-	onestate here;		/* note, macros know this name */
-	sopno look;
-	int i;
+	register cset *cs;
+	register sop s;
+	register sopno pc;
+	register onestate here;		/* note, macros know this name */
+	register sopno look;
+	register int i;
 
 	for (pc = start, INIT(here, pc); pc != stop; pc++, INC(here)) {
 		s = g->strip[pc];
@@ -947,47 +926,68 @@ step(struct re_guts *g,
 #ifdef REDEBUG
 /*
  - print - print a set of states
+ == #ifdef REDEBUG
+ == static void print(struct match *m, char *caption, states st, \
+ ==	int ch, FILE *d);
+ == #endif
  */
 static void
-print(struct match *m, char *caption, states st, int ch, FILE *d)
+print(m, caption, st, ch, d)
+struct match *m;
+char *caption;
+states st;
+int ch;
+FILE *d;
 {
-	struct re_guts *g = m->g;
-	int i;
-	int first = 1;
+	register struct re_guts *g = m->g;
+	register int i;
+	register int first = 1;
 
 	if (!(m->eflags&REG_TRACE))
 		return;
 
-	(void)fprintf(d, "%s", caption);
+	fprintf(d, "%s", caption);
 	if (ch != '\0')
-		(void)fprintf(d, " %s", pchar(ch));
+		fprintf(d, " %s", pchar(ch));
 	for (i = 0; i < g->nstates; i++)
 		if (ISSET(st, i)) {
-			(void)fprintf(d, "%s%d", (first) ? "\t" : ", ", i);
+			fprintf(d, "%s%d", (first) ? "\t" : ", ", i);
 			first = 0;
 		}
-	(void)fprintf(d, "\n");
+	fprintf(d, "\n");
 }
 
 /* 
  - at - print current situation
+ == #ifdef REDEBUG
+ == static void at(struct match *m, char *title, char *start, char *stop, \
+ ==						sopno startst, sopno stopst);
+ == #endif
  */
 static void
-at(struct match *m, char *title, char *start, char *stop, sopno startst,
-    sopno stopst)
+at(m, title, start, stop, startst, stopst)
+struct match *m;
+char *title;
+char *start;
+char *stop;
+sopno startst;
+sopno stopst;
 {
 	if (!(m->eflags&REG_TRACE))
 		return;
 
-	(void)printf("%s %s-", title, pchar(*start));
-	(void)printf("%s ", pchar(*stop));
-	(void)printf("%ld-%ld\n", (long)startst, (long)stopst);
+	printf("%s %s-", title, pchar(*start));
+	printf("%s ", pchar(*stop));
+	printf("%ld-%ld\n", (long)startst, (long)stopst);
 }
 
 #ifndef PCHARDONE
 #define	PCHARDONE	/* never again */
 /*
  - pchar - make a character printable
+ == #ifdef REDEBUG
+ == static char *pchar(int ch);
+ == #endif
  *
  * Is this identical to regchar() over in debug.c?  Well, yes.  But a
  * duplicate here avoids having a debugging-capable regexec.o tied to
@@ -995,14 +995,15 @@ at(struct match *m, char *title, char *start, char *stop, sopno startst,
  * the non-debug compilation anyway, so it doesn't matter much.
  */
 static char *			/* -> representation */
-pchar(int ch)
+pchar(ch)
+int ch;
 {
 	static char pbuf[10];
 
-	if (isprint(ch) || ch == ' ')
-		(void)snprintf(pbuf, sizeof pbuf, "%c", ch);
+	if (ap_isprint(ch) || ch == ' ')
+		sprintf(pbuf, "%c", ch);
 	else
-		(void)snprintf(pbuf, sizeof pbuf, "\\%o", ch);
+		sprintf(pbuf, "\\%o", ch);
 	return(pbuf);
 }
 #endif
@@ -1017,4 +1018,3 @@ pchar(int ch)
 #undef	print
 #undef	at
 #undef	match
-#undef	nope

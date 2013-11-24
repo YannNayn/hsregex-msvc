@@ -1,55 +1,34 @@
-/*	$OpenBSD: regerror.c,v 1.13 2005/08/05 13:03:00 espie Exp $ */
-/*-
- * Copyright (c) 1992, 1993, 1994 Henry Spencer.
- * Copyright (c) 1992, 1993, 1994
- *	The Regents of the University of California.  All rights reserved.
- *
- * This code is derived from software contributed to Berkeley by
- * Henry Spencer.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- *	@(#)regerror.c	8.4 (Berkeley) 3/20/94
- */
-
 #include <sys/types.h>
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
 #include <stdlib.h>
-#include <regex.h>
 
+#include "hsregex.h"
 #include "utils.h"
+#include "regerror.ih"
 
-#ifdef _MSC_VER
-#define snprintf _snprintf
-#endif
-
-static char *regatoi(const regex_t *, char *, int);
-
+/*
+ = #define	REG_NOMATCH	 1
+ = #define	REG_BADPAT	 2
+ = #define	REG_ECOLLATE	 3
+ = #define	REG_ECTYPE	 4
+ = #define	REG_EESCAPE	 5
+ = #define	REG_ESUBREG	 6
+ = #define	REG_EBRACK	 7
+ = #define	REG_EPAREN	 8
+ = #define	REG_EBRACE	 9
+ = #define	REG_BADBR	10
+ = #define	REG_ERANGE	11
+ = #define	REG_ESPACE	12
+ = #define	REG_BADRPT	13
+ = #define	REG_EMPTY	14
+ = #define	REG_ASSERT	15
+ = #define	REG_INVARG	16
+ = #define	REG_ATOI	255	// convert name to number (!)
+ = #define	REG_ITOA	0400	// convert number to name (!)
+ */
 static struct rerr {
 	int code;
 	char *name;
@@ -76,32 +55,35 @@ static struct rerr {
 
 /*
  - regerror - the interface to error numbers
- = extern size_t regerror(int, const regex_t *, char *, size_t);
+ = API_EXPORT(size_t) regerror(int, const regex_t *, char *, size_t);
  */
 /* ARGSUSED */
-size_t
-regerror(int errcode, const regex_t *preg, char *errbuf, size_t errbuf_size)
+API_EXPORT(size_t)
+regerror(errcode, preg, errbuf, errbuf_size)
+int errcode;
+const regex_t *preg;
+char *errbuf;
+size_t errbuf_size;
 {
-	struct rerr *r;
-	size_t len;
-	int target = errcode &~ REG_ITOA;
-	char *s;
+	register struct rerr *r;
+	register size_t len;
+	register int target = errcode &~ REG_ITOA;
+	register char *s;
 	char convbuf[50];
 
 	if (errcode == REG_ATOI)
-		s = regatoi(preg, convbuf, sizeof convbuf);
+		s = regatoi(preg, convbuf);
 	else {
 		for (r = rerrs; r->code != 0; r++)
 			if (r->code == target)
 				break;
 	
 		if (errcode&REG_ITOA) {
-			if (r->code != 0) {
-				assert(strlen(r->name) < sizeof(convbuf));
-				(void) strlcpy(convbuf, r->name, sizeof convbuf);
-			} else
-				(void)snprintf(convbuf, sizeof convbuf,
-				    "REG_0x%x", target);
+			if (r->code != 0)
+				(void) strcpy(convbuf, r->name);
+			else
+				sprintf(convbuf, "REG_0x%x", target);
+			assert(strlen(convbuf) < sizeof(convbuf));
 			s = convbuf;
 		} else
 			s = r->explain;
@@ -109,7 +91,12 @@ regerror(int errcode, const regex_t *preg, char *errbuf, size_t errbuf_size)
 
 	len = strlen(s) + 1;
 	if (errbuf_size > 0) {
-		strlcpy(errbuf, s, errbuf_size);
+		if (errbuf_size > len)
+			(void) strcpy(errbuf, s);
+		else {
+			(void) strncpy(errbuf, s, errbuf_size-1);
+			errbuf[errbuf_size-1] = '\0';
+		}
 	}
 
 	return(len);
@@ -117,11 +104,14 @@ regerror(int errcode, const regex_t *preg, char *errbuf, size_t errbuf_size)
 
 /*
  - regatoi - internal routine to implement REG_ATOI
+ == static char *regatoi(const regex_t *preg, char *localbuf);
  */
 static char *
-regatoi(const regex_t *preg, char *localbuf, int localbufsize)
+regatoi(preg, localbuf)
+const regex_t *preg;
+char *localbuf;
 {
-	struct rerr *r;
+	register struct rerr *r;
 
 	for (r = rerrs; r->code != 0; r++)
 		if (strcmp(r->name, preg->re_endp) == 0)
@@ -129,6 +119,6 @@ regatoi(const regex_t *preg, char *localbuf, int localbufsize)
 	if (r->code == 0)
 		return("0");
 
-	(void)snprintf(localbuf, localbufsize, "%d", r->code);
+	sprintf(localbuf, "%d", r->code);
 	return(localbuf);
 }
